@@ -7,7 +7,9 @@ name = "ppq-mertactor"
 version = "0.1.0"
 dependencies = [
     "requests",
-    "pypdf"
+    "pypdf",
+    "rich",
+    "questionary"
 ]
 
 [project.optional-dependencies]

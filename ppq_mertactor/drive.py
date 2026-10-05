@@ -7,7 +7,7 @@ def fetch_document(file_id: str, expected_filename: str) -> str:
     Fetches a document from Google Drive using the public download link,
     or returns the cached version if it exists.
     """
-    cache_dir = os.path.join(".cache", "drive_cache")
+    cache_dir = os.environ.get("DRIVE_CACHE_DIR", os.path.join(".cache", "drive_cache"))
     os.makedirs(cache_dir, exist_ok=True)
 
     cached_path = os.path.join(cache_dir, expected_filename)
