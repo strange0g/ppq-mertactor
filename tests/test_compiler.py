@@ -243,3 +243,189 @@ def test_cache_invalidation():
     assert len(responses.calls) == 6
     if os.path.exists(output_dir):
         shutil.rmtree(output_dir)
+
+@responses.activate
+def test_er_compilation_chronological_ordering():
+    from ppq_mertactor.compiler import compile_examiner_reports
+    import shutil
+    cache_dir = ".cache/drive_cache"
+    output_dir = "output_er"
+    if os.path.exists(cache_dir):
+        shutil.rmtree(cache_dir)
+    if os.path.exists(output_dir):
+        shutil.rmtree(output_dir)
+
+    os.makedirs(cache_dir, exist_ok=True)
+    os.makedirs(output_dir, exist_ok=True)
+
+    with open("tests/fixtures/qp.pdf", "rb") as f:
+        er_content = f.read()
+
+    mock_html = """
+    <script>AF_initDataCallback({key: 'ds:1', data: [
+        ["mock_w_er", "9609_w23_er.pdf"],
+        ["mock_s_gt", "9609_s23_gt.pdf"],
+        ["mock_m_er", "9609_m23_er.pdf"],
+        ["mock_s_er", "9609_s23_er.pdf"]
+    ]});</script>
+    """
+
+    responses.add(responses.GET, "https://drive.google.com/drive/folders/mock_er_folder", body=mock_html, status=200)
+    responses.add(responses.GET, "https://drive.google.com/uc?export=download&id=mock_m_er", body=er_content, status=200)
+    responses.add(responses.GET, "https://drive.google.com/uc?export=download&id=mock_s_er", body=er_content, status=200)
+    responses.add(responses.GET, "https://drive.google.com/uc?export=download&id=mock_w_er", body=er_content, status=200)
+
+    output_path = compile_examiner_reports("9609", "2023", "mock_er_folder", output_dir=output_dir)
+
+    assert os.path.exists(output_path)
+    assert output_path == os.path.join(output_dir, "9609", "2023", "9609_2023_Examiner_Reports.pdf")
+
+    reader = PdfReader(output_path)
+    assert len(reader.pages) == 3
+
+    outlines = reader.outline
+    titles = []
+    for item in outlines:
+        if isinstance(item, list):
+            continue
+        if hasattr(item, 'title'):
+            titles.append(item.title)
+        elif isinstance(item, dict) and '/Title' in item:
+            titles.append(item['/Title'])
+
+    assert "Feb/March 2023" in titles
+    assert "May/June 2023" in titles
+    assert "Oct/Nov 2023" in titles
+
+    # Assert correct order
+    assert titles == ["Feb/March 2023", "May/June 2023", "Oct/Nov 2023"]
+
+@responses.activate
+def test_er_compilation_missing_series():
+    from ppq_mertactor.compiler import compile_examiner_reports
+    import shutil
+    cache_dir = ".cache/drive_cache"
+    output_dir = "output_er_missing"
+    if os.path.exists(cache_dir):
+        shutil.rmtree(cache_dir)
+    if os.path.exists(output_dir):
+        shutil.rmtree(output_dir)
+
+    os.makedirs(cache_dir, exist_ok=True)
+    os.makedirs(output_dir, exist_ok=True)
+
+    with open("tests/fixtures/qp.pdf", "rb") as f:
+        er_content = f.read()
+
+    # Missing "s" (May/June)
+    mock_html = """
+    <script>AF_initDataCallback({key: 'ds:1', data: [
+        ["mock_w_er", "9609_w23_er.pdf"],
+        ["mock_m_er", "9609_m23_er.pdf"]
+    ]});</script>
+    """
+
+    responses.add(responses.GET, "https://drive.google.com/drive/folders/mock_er_folder_missing", body=mock_html, status=200)
+    responses.add(responses.GET, "https://drive.google.com/uc?export=download&id=mock_m_er", body=er_content, status=200)
+    responses.add(responses.GET, "https://drive.google.com/uc?export=download&id=mock_w_er", body=er_content, status=200)
+
+    output_path = compile_examiner_reports("9609", "2023", "mock_er_folder_missing", output_dir=output_dir)
+
+    assert os.path.exists(output_path)
+
+    reader = PdfReader(output_path)
+    assert len(reader.pages) == 2  # 1 page each from m and w
+
+    outlines = reader.outline
+    titles = []
+    for item in outlines:
+        if isinstance(item, list):
+            continue
+        if hasattr(item, 'title'):
+            titles.append(item.title)
+        elif isinstance(item, dict) and '/Title' in item:
+            titles.append(item['/Title'])
+
+    # Should only contain m and w in chronological order
+    assert titles == ["Feb/March 2023", "Oct/Nov 2023"]
+
+
+@responses.activate
+def test_er_compilation_grade_thresholds_omitted():
+    from ppq_mertactor.compiler import compile_examiner_reports
+    import shutil
+    cache_dir = ".cache/drive_cache"
+    output_dir = "output_er_gt"
+    if os.path.exists(cache_dir):
+        shutil.rmtree(cache_dir)
+    if os.path.exists(output_dir):
+        shutil.rmtree(output_dir)
+
+    os.makedirs(cache_dir, exist_ok=True)
+    os.makedirs(output_dir, exist_ok=True)
+
+    with open("tests/fixtures/qp.pdf", "rb") as f:
+        er_content = f.read()
+
+    # Includes "gt"
+    mock_html = """
+    <script>AF_initDataCallback({key: 'ds:1', data: [
+        ["mock_s_er", "9609_s23_er.pdf"],
+        ["mock_s_gt", "9609_s23_gt.pdf"]
+    ]});</script>
+    """
+
+    responses.add(responses.GET, "https://drive.google.com/drive/folders/mock_er_folder_gt", body=mock_html, status=200)
+    responses.add(responses.GET, "https://drive.google.com/uc?export=download&id=mock_s_er", body=er_content, status=200)
+    # We do NOT add a response for gt. If it tries to fetch gt, it will crash with ConnectionError.
+
+    output_path = compile_examiner_reports("9609", "2023", "mock_er_folder_gt", output_dir=output_dir)
+
+    assert os.path.exists(output_path)
+
+    reader = PdfReader(output_path)
+    assert len(reader.pages) == 1  # 1 page from s
+
+    outlines = reader.outline
+    titles = []
+    for item in outlines:
+        if isinstance(item, list):
+            continue
+        if hasattr(item, 'title'):
+            titles.append(item.title)
+        elif isinstance(item, dict) and '/Title' in item:
+            titles.append(item['/Title'])
+
+    assert titles == ["May/June 2023"]
+    assert "gt" not in str(titles).lower()
+
+@responses.activate
+def test_er_compilation_no_reports():
+    from ppq_mertactor.compiler import compile_examiner_reports
+    import shutil
+    cache_dir = ".cache/drive_cache"
+    output_dir = "output_er_no_reports"
+    if os.path.exists(cache_dir):
+        shutil.rmtree(cache_dir)
+    if os.path.exists(output_dir):
+        shutil.rmtree(output_dir)
+
+    os.makedirs(cache_dir, exist_ok=True)
+    os.makedirs(output_dir, exist_ok=True)
+
+    mock_html = """
+    <script>AF_initDataCallback({key: 'ds:1', data: [
+        ["mock_s_gt", "9609_s23_gt.pdf"],
+        ["mock_qp", "9609_s23_qp_11.pdf"]
+    ]});</script>
+    """
+
+    responses.add(responses.GET, "https://drive.google.com/drive/folders/mock_er_folder_no_reports", body=mock_html, status=200)
+
+    output_path = compile_examiner_reports("9609", "2023", "mock_er_folder_no_reports", output_dir=output_dir)
+
+    assert os.path.exists(output_path)
+
+    # Check that it produces an empty pdf
+    reader = PdfReader(output_path)
+    assert len(reader.pages) == 0
