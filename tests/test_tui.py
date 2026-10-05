@@ -114,3 +114,137 @@ def test_interactive_tui(mock_questionary, mock_compile_er, mock_compile_compone
 
     assert mock_compile_component.call_count == 2 # Comp 1 for 2021 and 2022
     assert mock_compile_er.call_count == 2 # ER for 2021 and 2022
+
+@patch("ppq_mertactor.cli.compile_component")
+@patch("ppq_mertactor.cli.compile_examiner_reports")
+def test_invalid_year_format(mock_er, mock_comp):
+    """Test invalid year format triggers SystemExit."""
+    args = ["--year", "abc", "--components", "1"]
+    with pytest.raises(SystemExit):
+        cli.main(args)
+    assert mock_comp.call_count == 0
+
+@patch("ppq_mertactor.cli.compile_component")
+@patch("ppq_mertactor.cli.compile_examiner_reports")
+def test_missing_arguments(mock_er, mock_comp):
+    """Test missing targets or missing years skips correctly."""
+    # Years but no targets
+    args = ["--year", "2023"]
+    with patch("ppq_mertactor.cli.questionary"):
+        cli.main(args)
+    assert mock_comp.call_count == 0
+    assert mock_er.call_count == 0
+
+    # Targets but no years
+    args = ["--components", "1", "--examiner-reports", "--er-folder", "id1"]
+    with patch("ppq_mertactor.cli.questionary"):
+        cli.main(args)
+    assert mock_comp.call_count == 0
+    assert mock_er.call_count == 0
+
+@patch("ppq_mertactor.cli.compile_component")
+@patch("ppq_mertactor.cli.compile_examiner_reports")
+def test_output_dir_override(mock_er, mock_comp):
+    """Test overriding output directory."""
+    args = ["--year", "2023", "--components", "1", "--series-m", "id1", "--output-dir", "/custom/path"]
+    with patch("ppq_mertactor.cli.questionary"):
+        cli.main(args)
+    assert mock_comp.call_count == 1
+    assert mock_comp.call_args[1].get('output_dir') == "/custom/path" or mock_comp.call_args[0][4] == "/custom/path"
+
+@patch("ppq_mertactor.cli.compile_component")
+def test_missing_series_folders(mock_comp):
+    """Test that missing series folders skips component compilation."""
+    args = ["--year", "2023", "--components", "1"]
+    with patch("ppq_mertactor.cli.questionary"):
+        cli.main(args)
+    assert mock_comp.call_count == 0
+
+@patch("ppq_mertactor.cli.compile_examiner_reports")
+def test_missing_er_folder(mock_er):
+    """Test that missing er-folder skips examiner reports compilation."""
+    args = ["--year", "2023", "--examiner-reports"]
+    with patch("ppq_mertactor.cli.questionary"):
+        cli.main(args)
+    assert mock_er.call_count == 0
+
+def test_cache_dir_override():
+    """Test cache dir override."""
+    import os
+    args = ["--year", "2023", "--cache-dir", "/my/cache"]
+    # We shouldn't need to patch questionary for this if we just check environ
+    with patch("ppq_mertactor.cli.questionary"):
+        cli.main(args)
+    assert os.environ.get("DRIVE_CACHE_DIR") == "/my/cache"
+
+@patch("ppq_mertactor.cli.questionary")
+def test_tui_no_years_selected(mock_questionary):
+    """Test TUI with no years selected."""
+    args = []
+    mock_checkbox = MagicMock()
+    mock_questionary.checkbox.return_value = mock_checkbox
+    mock_checkbox.ask.side_effect = [[]] # No years
+
+    with patch("ppq_mertactor.cli.compile_component") as mock_comp:
+        cli.main(args)
+        assert mock_comp.call_count == 0
+
+@patch("ppq_mertactor.cli.questionary")
+def test_tui_no_targets_selected(mock_questionary):
+    """Test TUI with no targets selected."""
+    args = []
+    mock_checkbox = MagicMock()
+    mock_questionary.checkbox.return_value = mock_checkbox
+    mock_checkbox.ask.side_effect = [["2023"], []] # Years, but no targets
+
+    with patch("ppq_mertactor.cli.compile_component") as mock_comp:
+        cli.main(args)
+        assert mock_comp.call_count == 0
+
+@patch("ppq_mertactor.cli.questionary")
+def test_tui_missing_syllabus(mock_questionary):
+    """Test TUI with missing syllabus (returns empty)."""
+    args = []
+    mock_checkbox = MagicMock()
+    mock_questionary.checkbox.return_value = mock_checkbox
+    mock_checkbox.ask.side_effect = [["2023"], ["Component 1"]]
+
+    mock_text = MagicMock()
+    mock_questionary.text.return_value = mock_text
+    mock_text.ask.side_effect = [""] # Empty syllabus
+
+    with patch("ppq_mertactor.cli.compile_component") as mock_comp:
+        cli.main(args)
+        assert mock_comp.call_count == 0
+
+
+@patch("ppq_mertactor.cli.compile_component")
+@patch("ppq_mertactor.cli.compile_examiner_reports")
+def test_headless_all_years_all_components(mock_er, mock_comp):
+    """Test passing both --all-years and --all-components."""
+    args = ["--all-years", "--all-components", "--series-m", "id1"]
+    with patch("ppq_mertactor.cli.questionary"):
+        cli.main(args)
+    # 10 years * 4 components = 40 component calls
+    assert mock_comp.call_count == 40
+    assert mock_er.call_count == 0
+
+@patch("ppq_mertactor.cli.compile_component")
+@patch("ppq_mertactor.cli.compile_examiner_reports")
+def test_headless_year_and_all_years(mock_er, mock_comp):
+    """Test passing both --year and --all-years."""
+    args = ["--year", "2023", "--all-years", "--components", "1", "--series-m", "id1"]
+    with patch("ppq_mertactor.cli.questionary"):
+        cli.main(args)
+    # --all-years takes precedence
+    assert mock_comp.call_count == 10
+
+@patch("ppq_mertactor.cli.compile_component")
+@patch("ppq_mertactor.cli.compile_examiner_reports")
+def test_headless_components_and_all_components(mock_er, mock_comp):
+    """Test passing both --components and --all-components."""
+    args = ["--year", "2023", "--components", "1", "--all-components", "--series-m", "id1"]
+    with patch("ppq_mertactor.cli.questionary"):
+        cli.main(args)
+    # --all-components takes precedence
+    assert mock_comp.call_count == 4
