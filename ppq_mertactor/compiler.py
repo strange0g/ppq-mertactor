@@ -12,55 +12,9 @@ def get_series_code(series: str) -> str:
     }
     return mapping.get(series, "s")
 
-def compile_variant(syllabus: str, year: str, series: str, variant: str, component: str, folder_id: str, output_dir: str = "output") -> str:
-    """
-    Identifies the QP and MS for a specific variant in a drive folder,
-    fetches them, collates them (QP followed by MS),
-    and saves the output to the specified structure.
-    """
-    # 1. Fetch metadata
-    metadata = get_folder_metadata(folder_id)
-
-    # 2. Identify documents
-    # Format: 9609_s23_qp_11.pdf
-    year_short = year[-2:]
-    series_code = get_series_code(series)
-
-    qp_filename = f"{syllabus}_{series_code}{year_short}_qp_{variant}.pdf"
-    ms_filename = f"{syllabus}_{series_code}{year_short}_ms_{variant}.pdf"
-
-    if qp_filename not in metadata:
-        raise ValueError(f"Question Paper {qp_filename} not found in folder metadata.")
-    if ms_filename not in metadata:
-        raise ValueError(f"Mark Scheme {ms_filename} not found in folder metadata.")
-
-    qp_file_id = metadata[qp_filename]
-    ms_file_id = metadata[ms_filename]
-
-    # 3. Fetch documents
-    qp_path = fetch_document(qp_file_id, qp_filename)
-    ms_path = fetch_document(ms_file_id, ms_filename)
-
-    # 4. Collate documents
-    writer = PdfWriter()
-    writer.append(qp_path)
-    writer.append(ms_path)
-
-    # 5. Output
-    full_output_dir = os.path.join(output_dir, syllabus, year)
-    os.makedirs(full_output_dir, exist_ok=True)
-
-    output_filename = f"{syllabus}_{year}_Component_{component}.pdf"
-    output_path = os.path.join(full_output_dir, output_filename)
-
-    with open(output_path, "wb") as out_f:
-        writer.write(out_f)
-
-    return output_path
-
 def compile_examiner_reports(syllabus: str, year: str, folder_id: str, output_dir: str = "output") -> str:
     """
-    Compiles all series examiner reports for the selected year into a single document.
+    Compiles an Examiner Reports Compilation consolidating all series examiner reports for the selected year.
     """
     # 1. Fetch metadata
     metadata = get_folder_metadata(folder_id)
@@ -95,6 +49,9 @@ def compile_examiner_reports(syllabus: str, year: str, folder_id: str, output_di
             # Add bookmark
             writer.add_outline_item(series_titles[code], start_page_index)
 
+    if len(writer.pages) == 0:
+        return None
+
     # Output
     full_output_dir = os.path.join(output_dir, syllabus, year)
     os.makedirs(full_output_dir, exist_ok=True)
@@ -109,7 +66,7 @@ def compile_examiner_reports(syllabus: str, year: str, folder_id: str, output_di
 
 def compile_component(syllabus: str, year: str, component: str, series_folders: dict[str, str], output_dir: str = "output") -> str:
     """
-    Compiles a full-year revision booklet for a specific component.
+    Compiles a Component Compilation for a specific component.
     """
 
     # Chronological series order
@@ -182,6 +139,8 @@ def compile_component(syllabus: str, year: str, component: str, series_folders: 
             docs = component_files[variant]
             sorted_doc_types = sorted(docs.keys(), key=lambda d: doc_order.get(d, 99))
 
+            variant_parent = None
+
             for doc_type in sorted_doc_types:
                 file_id = docs[doc_type]
                 filename = f"{syllabus}_{series_code}{year_short}_{doc_type}_{variant}.pdf"
@@ -196,9 +155,13 @@ def compile_component(syllabus: str, year: str, component: str, series_folders: 
                     series_parent = writer.add_outline_item(series_bookmark_title, start_page)
                     series_has_pages = True
 
-                # Add nested bookmark
-                doc_title = f"Variant {variant} - {doc_names.get(doc_type, doc_type)}"
-                writer.add_outline_item(doc_title, start_page, parent=series_parent)
+                if variant_parent is None:
+                    variant_title = f"Variant {variant}"
+                    variant_parent = writer.add_outline_item(variant_title, start_page, parent=series_parent)
+
+                # Add nested bookmark (Level 3)
+                doc_title = f"{doc_names.get(doc_type, doc_type)}"
+                writer.add_outline_item(doc_title, start_page, parent=variant_parent)
 
     # Output
     full_output_dir = os.path.join(output_dir, syllabus, year)
