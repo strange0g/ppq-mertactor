@@ -179,6 +179,8 @@ def test_cache_invalidation():
     output_dir = "output_cache"
     if os.path.exists(cache_dir):
         shutil.rmtree(cache_dir)
+    if os.path.exists(output_dir):
+        shutil.rmtree(output_dir)
     os.makedirs(cache_dir, exist_ok=True)
 
     with open("tests/fixtures/qp.pdf", "rb") as f:
@@ -239,3 +241,5 @@ def test_cache_invalidation():
     )
 
     assert len(responses.calls) == 6
+    if os.path.exists(output_dir):
+        shutil.rmtree(output_dir)

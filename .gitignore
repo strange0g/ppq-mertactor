@@ -4,6 +4,6 @@ node_modules/
 __pycache__/
 .pytest_cache/
 .cache/
-output/
+output*/
 venv/
 ppq_mertactor.egg-info/
