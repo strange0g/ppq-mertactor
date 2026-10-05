@@ -2,8 +2,23 @@ import os
 import requests
 import re
 import json
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 from typing import Callable, Optional
+
+def _get_session() -> requests.Session:
+    """Returns a requests Session with retry logic configured."""
+    session = requests.Session()
+    retries = Retry(
+        total=3,
+        backoff_factor=0.3,
+        status_forcelist=[500, 502, 503, 504]
+    )
+    adapter = HTTPAdapter(max_retries=retries)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    return session
 
 def fetch_document(file_id: str, expected_filename: str, progress_callback: Optional[Callable[[int, int], None]] = None) -> str:
     """
@@ -18,7 +33,8 @@ def fetch_document(file_id: str, expected_filename: str, progress_callback: Opti
         return cached_path
 
     url = f"https://drive.google.com/uc?export=download&id={file_id}"
-    response = requests.get(url, stream=True)
+    session = _get_session()
+    response = session.get(url, stream=True, timeout=10)
     response.raise_for_status()
 
     total_bytes = int(response.headers.get("Content-Length", 0))
@@ -38,7 +54,8 @@ def get_folder_metadata(folder_id: str) -> dict[str, str]:
     Returns a dictionary mapping filenames/foldernames to their Google Drive IDs.
     """
     url = f"https://drive.google.com/drive/folders/{folder_id}"
-    response = requests.get(url)
+    session = _get_session()
+    response = session.get(url, timeout=10)
     response.raise_for_status()
 
     # We will use a regular expression to extract the ID and Name pairs.

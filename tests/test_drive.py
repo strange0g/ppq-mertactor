@@ -21,6 +21,8 @@ def test_fetch_document_progress_callback():
 
     # Mocking response
     url = f"https://drive.google.com/uc?export=download&id={file_id}"
+
+    # responses library stream handling
     responses.add(
         responses.GET,
         url,
@@ -34,11 +36,98 @@ def test_fetch_document_progress_callback():
     # Call fetch_document with callback
     fetch_document(file_id, expected_filename, progress_callback=callback_mock)
 
-    # Callback should have been called
-    assert callback_mock.called
+    # Callback should have been called once with length 8 because chunk_size is 8192
+    assert callback_mock.call_count == 1
+    callback_mock.assert_any_call(8, 8)
 
-    # Since chunk size in drive.py is 8192, we'll get one chunk of 8 bytes
-    callback_mock.assert_called_with(8, 8)
+@responses.activate
+def test_fetch_document_progress_callback_multiple_chunks():
+    from unittest.mock import patch
+    cache_dir = ".cache/drive_cache"
+    if os.path.exists(cache_dir):
+        shutil.rmtree(cache_dir)
+    os.makedirs(cache_dir, exist_ok=True)
+
+    file_id = "test_file_id_chunks"
+    expected_filename = "test_file_chunks.pdf"
+
+    url = f"https://drive.google.com/uc?export=download&id={file_id}"
+    responses.add(
+        responses.GET,
+        url,
+        body=b"12345678", # 8 bytes
+        headers={"Content-Length": "8"},
+        status=200
+    )
+
+    callback_mock = MagicMock()
+
+    # We patch response.iter_content to force returning small chunks regardless of what responses gives
+    with patch('requests.Response.iter_content') as mock_iter:
+        mock_iter.return_value = [b"1234", b"5678"]
+        fetch_document(file_id, expected_filename, progress_callback=callback_mock)
+
+    assert callback_mock.call_count == 2
+    callback_mock.assert_any_call(4, 8)
+
+@responses.activate
+def test_fetch_document_cache_hit():
+    cache_dir = ".cache/drive_cache"
+    if os.path.exists(cache_dir):
+        shutil.rmtree(cache_dir)
+    os.makedirs(cache_dir, exist_ok=True)
+
+    file_id = "test_file_id"
+    expected_filename = "test_file.pdf"
+    cached_path = os.path.join(cache_dir, expected_filename)
+
+    # Create dummy cached file
+    with open(cached_path, "wb") as f:
+        f.write(b"cached_content")
+
+    # Mocking response to ensure it fails if called (shouldn't be called)
+    url = f"https://drive.google.com/uc?export=download&id={file_id}"
+    responses.add(
+        responses.GET,
+        url,
+        status=500
+    )
+
+    # Call fetch_document
+    result = fetch_document(file_id, expected_filename)
+
+    # Assert cache is used
+    assert result == cached_path
+    assert len(responses.calls) == 0
+
+@responses.activate
+def test_network_retries():
+    cache_dir = ".cache/drive_cache"
+    if os.path.exists(cache_dir):
+        shutil.rmtree(cache_dir)
+    os.makedirs(cache_dir, exist_ok=True)
+
+    folder_id = "retry_folder_id"
+    url = f"https://drive.google.com/drive/folders/{folder_id}"
+
+    # Mock 3 failures then 1 success
+    responses.add(responses.GET, url, status=503)
+    responses.add(responses.GET, url, status=503)
+    responses.add(responses.GET, url, status=503)
+
+    root_html = """
+    <script>AF_initDataCallback({key: 'ds:1', data: [
+        ["file_id", "file.pdf"]
+    ]});</script>
+    """
+    responses.add(responses.GET, url, body=root_html, status=200)
+
+    # Call get_folder_metadata
+    metadata = get_folder_metadata(folder_id)
+
+    # Assert retry was successful and 4 calls were made
+    assert metadata == {"file.pdf": "file_id"}
+    assert len(responses.calls) == 4
 
 @responses.activate
 def test_crawl_tree():
@@ -117,6 +206,99 @@ def test_crawl_tree():
         "2024": {
             "w": {
                 "9609_w24_in_31.pdf": "file_4_id"
+            }
+        }
+    }
+
+
+@responses.activate
+def test_crawl_tree_invalid_root_id():
+    cache_dir = ".cache/drive_cache"
+    if os.path.exists(cache_dir):
+        shutil.rmtree(cache_dir)
+    os.makedirs(cache_dir, exist_ok=True)
+
+    root_id = "invalid_root_folder_id"
+
+    # Mock 404 response
+    responses.add(
+        responses.GET,
+        f"https://drive.google.com/drive/folders/{root_id}",
+        status=404
+    )
+
+    with pytest.raises(Exception): # should raise HTTPError
+        crawl_tree(root_id)
+
+@responses.activate
+def test_crawl_tree_empty_folder():
+    cache_dir = ".cache/drive_cache"
+    if os.path.exists(cache_dir):
+        shutil.rmtree(cache_dir)
+    os.makedirs(cache_dir, exist_ok=True)
+
+    root_id = "empty_root_folder_id"
+
+    # Root folder response (contains nothing relevant)
+    root_html = """
+    <script>AF_initDataCallback({key: 'ds:1', data: [
+    ]});</script>
+    """
+
+    responses.add(
+        responses.GET,
+        f"https://drive.google.com/drive/folders/{root_id}",
+        body=root_html,
+        status=200
+    )
+
+    tree = crawl_tree(root_id)
+    assert tree == {}
+
+@responses.activate
+def test_crawl_tree_deeply_nested_subfolders_ignored():
+    cache_dir = ".cache/drive_cache"
+    if os.path.exists(cache_dir):
+        shutil.rmtree(cache_dir)
+    os.makedirs(cache_dir, exist_ok=True)
+
+    root_id = "root_folder_with_nesting_id"
+
+    # Root folder response (contains years)
+    root_html = """
+    <script>AF_initDataCallback({key: 'ds:1', data: [
+        ["folder_2023_id", "2023"],
+        ["random_folder_id", "Random Folder"]
+    ]});</script>
+    """
+
+    # 2023 folder response (contains series)
+    html_2023 = """
+    <script>AF_initDataCallback({key: 'ds:1', data: [
+        ["folder_2023_m_id", "m"],
+        ["invalid_series_id", "invalid_series"]
+    ]});</script>
+    """
+
+    # m folder response (contains files and a nested folder masquerading as file without pdf extension)
+    html_2023_m = """
+    <script>AF_initDataCallback({key: 'ds:1', data: [
+        ["file_1_id", "9609_m23_qp_12.pdf"],
+        ["nested_folder_id", "nested_folder"]
+    ]});</script>
+    """
+
+    responses.add(responses.GET, f"https://drive.google.com/drive/folders/{root_id}", body=root_html, status=200)
+    responses.add(responses.GET, f"https://drive.google.com/drive/folders/folder_2023_id", body=html_2023, status=200)
+    responses.add(responses.GET, f"https://drive.google.com/drive/folders/folder_2023_m_id", body=html_2023_m, status=200)
+
+    tree = crawl_tree(root_id)
+
+    # Assert nested folders and invalid years/series are ignored
+    assert tree == {
+        "2023": {
+            "m": {
+                "9609_m23_qp_12.pdf": "file_1_id",
             }
         }
     }
