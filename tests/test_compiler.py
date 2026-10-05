@@ -385,3 +385,137 @@ def test_full_component_compilation():
         "Variant 03 - Mark Scheme"
     ]
     assert titles == expected_titles, f"Expected titles {expected_titles}, but got {titles}"
+
+@responses.activate
+def test_component_compilation_edge_cases_and_invariants():
+    from ppq_mertactor.compiler import compile_component
+    import random
+
+    cache_dir = ".cache/drive_cache"
+    output_dir = "output_edge"
+    if os.path.exists(cache_dir):
+        shutil.rmtree(cache_dir)
+    if os.path.exists(output_dir):
+        shutil.rmtree(output_dir)
+    os.makedirs(cache_dir, exist_ok=True)
+    os.makedirs(output_dir, exist_ok=True)
+
+    with open("tests/fixtures/qp.pdf", "rb") as f:
+        pdf_content = f.read()
+
+    series_folders = {
+        "Feb/March": "folder_m",
+        "May/June": "folder_s",
+        "Oct/Nov": "folder_w",
+        "Specimen": "folder_y"
+    }
+
+    # Generate chaotic/edge-case HTML content for each series
+    # m: variant 32 missing MS, but has gt and malformed files.
+    # s: variant 31 has IN, QP, MS in random order in the folder.
+    # w: empty / no relevant files for component 3
+    # y: variant 03 missing IN, missing QP, only has MS
+
+    data_m = [
+        ["m_in_32", "9609_m23_in_32.pdf"],
+        ["m_qp_32", "9609_m23_qp_32.pdf"],
+        ["m_gt", "9609_m23_gt.pdf"],
+        ["m_invalid_1", "9609_m23_32.pdf"],  # malformed
+        ["m_invalid_2", "invalid_name.pdf"]  # malformed
+    ]
+    random.shuffle(data_m)
+    data_m_str = str(data_m).replace("'", '"')
+    html_m = f"<script>AF_initDataCallback({{key: 'ds:1', data: {data_m_str}}});</script>"
+
+    data_s = [
+        ["s_ms_31", "9609_s23_ms_31.pdf"],
+        ["s_in_31", "9609_s23_in_31.pdf"],
+        ["s_qp_31", "9609_s23_qp_31.pdf"],
+        ["s_qp_41", "9609_s23_qp_41.pdf"] # different component
+    ]
+    random.shuffle(data_s)
+    data_s_str = str(data_s).replace("'", '"')
+    html_s = f"<script>AF_initDataCallback({{key: 'ds:1', data: {data_s_str}}});</script>"
+
+    data_w = [
+        ["w_qp_11", "9609_w23_qp_11.pdf"], # different component
+    ]
+    data_w_str = str(data_w).replace("'", '"')
+    html_w = f"<script>AF_initDataCallback({{key: 'ds:1', data: {data_w_str}}});</script>"
+
+    data_y = [
+        ["y_ms_03", "9609_y23_ms_03.pdf"] # Specimen only has MS
+    ]
+    data_y_str = str(data_y).replace("'", '"')
+    html_y = f"<script>AF_initDataCallback({{key: 'ds:1', data: {data_y_str}}});</script>"
+
+    mock_htmls = {
+        "folder_m": html_m,
+        "folder_s": html_s,
+        "folder_w": html_w,
+        "folder_y": html_y
+    }
+
+    for series, folder_id in series_folders.items():
+        responses.add(responses.GET, f"https://drive.google.com/drive/folders/{folder_id}", body=mock_htmls[folder_id], status=200)
+
+    # Add responses for all actual PDF files we want to be downloadable
+    all_file_ids = [
+        "m_in_32", "m_qp_32", "m_gt",
+        "s_in_31", "s_qp_31", "s_ms_31", "s_qp_41",
+        "w_qp_11",
+        "y_ms_03"
+    ]
+    for fid in all_file_ids:
+        responses.add(responses.GET, f"https://drive.google.com/uc?export=download&id={fid}", body=pdf_content, status=200)
+
+    # Compile Component 3
+    compile_component(
+        syllabus="9609",
+        year="2023",
+        component="3",
+        series_folders=series_folders,
+        output_dir=output_dir
+    )
+
+    output_pdf_path = os.path.join(output_dir, "9609", "2023", "9609_2023_Component_3.pdf")
+    assert os.path.exists(output_pdf_path), "Component compilation PDF not found."
+
+    reader = PdfReader(output_pdf_path)
+
+    # Expected valid files for component 3:
+    # m: in_32, qp_32  (no MS) -> 2 pages
+    # s: in_31, qp_31, ms_31 -> 3 pages
+    # w: none -> 0 pages
+    # y: ms_03 -> 1 page
+    # total pages: 6 pages
+    assert len(reader.pages) == 6, f"Expected 6 pages, got {len(reader.pages)}"
+
+    outlines = reader.outline
+
+    def extract_titles(items):
+        titles = []
+        for item in items:
+            if isinstance(item, list):
+                titles.extend(extract_titles(item))
+            else:
+                titles.append(item.title)
+        return titles
+
+    titles = extract_titles(outlines)
+
+    # We expect bookmarks to match exactly the sorted and filtered structure.
+    # Note: 'Oct/Nov 2023' should NOT be present because it had no valid component files.
+    expected_titles = [
+        "Feb/March 2023",
+        "Variant 32 - Insert",
+        "Variant 32 - Question Paper",
+        "May/June 2023",
+        "Variant 31 - Insert",
+        "Variant 31 - Question Paper",
+        "Variant 31 - Mark Scheme",
+        "Specimen 2023",
+        "Variant 03 - Mark Scheme"
+    ]
+
+    assert titles == expected_titles, f"Expected titles {expected_titles}, but got {titles}"
