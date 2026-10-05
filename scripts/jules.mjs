@@ -322,8 +322,10 @@ async function main() {
           process.exit(1);
         }
         console.log(`Watching session ${sessionId}...`);
+        const timeoutMs = args.timeout ? Number(args.timeout) * 1000 : 3600000;
         const finalStatus = await waitForSession(sessionId, {
           pollIntervalMs: 15000,
+          timeoutMs,
           onProgress: s => console.log(`[${new Date().toLocaleTimeString()}] State: ${s.state}`)
         });
         console.log(JSON.stringify({
