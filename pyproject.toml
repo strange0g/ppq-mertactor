@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ppq-mertactor"
+version = "0.1.0"
+dependencies = [
+    "requests",
+    "pypdf",
+    "rich",
+    "questionary"
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest",
+    "responses"
+]
+
+[tool.setuptools.packages.find]
+include = ["ppq_mertactor*"]
