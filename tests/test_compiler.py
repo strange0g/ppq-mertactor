@@ -174,6 +174,22 @@ def test_er_compilation_no_reports():
     output_path = compile_examiner_reports("9609", "2023", "mock_er_folder_no_reports", output_dir=output_dir)
     assert output_path is None
 
+    # Ensure no directories or files were created
+    if os.path.exists(output_dir):
+        # We can either check that output_dir is completely empty,
+        # or at least that no PDFs were generated in it.
+        # Given how `compile_examiner_reports` works, it shouldn't even create
+        # the `os.makedirs(full_output_dir, exist_ok=True)` if it returns early.
+        assert not os.path.exists(os.path.join(output_dir, "9609")), "Directories should not be created if no PDFs are found"
+        # Also check just in case output_dir has no PDFs
+        def get_all_files(path):
+            files = []
+            for dp, dn, filenames in os.walk(path):
+                for f in filenames:
+                    files.append(os.path.join(dp, f))
+            return files
+        assert len(get_all_files(output_dir)) == 0, "No files should be written"
+
 
 @responses.activate
 def test_full_component_compilation():
@@ -260,37 +276,45 @@ def test_full_component_compilation():
 
     assert count_bookmarks(outlines) == 19, "Incorrect number of bookmarks."
 
-    titles = []
-    def extract_titles(items):
+    # Verify the 3-tier bookmark hierarchy and target pages
+    bookmarks = []
+
+    def extract_bookmarks(items, level=0):
         for item in items:
             if isinstance(item, list):
-                extract_titles(item)
+                extract_bookmarks(item, level + 1)
             else:
-                titles.append(item.title)
-    extract_titles(outlines)
+                page_idx = reader.get_destination_page_number(item)
+                bookmarks.append((level, item.title, page_idx))
 
-    expected_titles = [
-        "Feb/March 2023",
-        "Variant 32",
-        "Insert",
-        "Question Paper",
-        "Mark Scheme",
-        "May/June 2023",
-        "Variant 31",
-        "Question Paper",
-        "Mark Scheme",
-        "Oct/Nov 2023",
-        "Variant 33",
-        "Insert",
-        "Question Paper",
-        "Mark Scheme",
-        "Specimen 2023",
-        "Variant 03",
-        "Insert",
-        "Question Paper",
-        "Mark Scheme"
+    extract_bookmarks(outlines)
+
+    # Note: test fixture qp.pdf is 1 page long.
+    # Therefore, each appended document consumes exactly 1 page.
+    # We can calculate the exact expected page index for each document.
+    expected_bookmarks = [
+        (0, "Feb/March 2023", 0),          # starts at page 0
+        (1, "Variant 32", 0),              # starts at page 0
+        (2, "Insert", 0),                  # in_32
+        (2, "Question Paper", 1),          # qp_32
+        (2, "Mark Scheme", 2),             # ms_32
+        (0, "May/June 2023", 3),           # starts at page 3
+        (1, "Variant 31", 3),              # starts at page 3
+        (2, "Question Paper", 3),          # qp_31
+        (2, "Mark Scheme", 4),             # ms_31
+        (0, "Oct/Nov 2023", 5),            # starts at page 5
+        (1, "Variant 33", 5),              # starts at page 5
+        (2, "Insert", 5),                  # in_33
+        (2, "Question Paper", 6),          # qp_33
+        (2, "Mark Scheme", 7),             # ms_33
+        (0, "Specimen 2023", 8),           # starts at page 8
+        (1, "Variant 03", 8),              # starts at page 8
+        (2, "Insert", 8),                  # in_03
+        (2, "Question Paper", 9),          # qp_03
+        (2, "Mark Scheme", 10)             # ms_03
     ]
-    assert titles == expected_titles, f"Expected titles {expected_titles}, but got {titles}"
+
+    assert bookmarks == expected_bookmarks, f"Expected bookmarks {expected_bookmarks}, but got {bookmarks}"
 
 
 @responses.activate
@@ -383,30 +407,31 @@ def test_component_compilation_edge_cases_and_invariants():
 
     outlines = reader.outline
 
-    def extract_titles(items):
-        titles = []
+    bookmarks = []
+
+    def extract_bookmarks(items, level=0):
         for item in items:
             if isinstance(item, list):
-                titles.extend(extract_titles(item))
+                extract_bookmarks(item, level + 1)
             else:
-                titles.append(item.title)
-        return titles
+                page_idx = reader.get_destination_page_number(item)
+                bookmarks.append((level, item.title, page_idx))
 
-    titles = extract_titles(outlines)
+    extract_bookmarks(outlines)
 
-    expected_titles = [
-        "Feb/March 2023",
-        "Variant 32",
-        "Insert",
-        "Question Paper",
-        "May/June 2023",
-        "Variant 31",
-        "Insert",
-        "Question Paper",
-        "Mark Scheme",
-        "Specimen 2023",
-        "Variant 03",
-        "Mark Scheme"
+    expected_bookmarks = [
+        (0, "Feb/March 2023", 0),
+        (1, "Variant 32", 0),
+        (2, "Insert", 0),                  # in_32
+        (2, "Question Paper", 1),          # qp_32
+        (0, "May/June 2023", 2),
+        (1, "Variant 31", 2),
+        (2, "Insert", 2),                  # in_31
+        (2, "Question Paper", 3),          # qp_31
+        (2, "Mark Scheme", 4),             # ms_31
+        (0, "Specimen 2023", 5),
+        (1, "Variant 03", 5),
+        (2, "Mark Scheme", 5)              # ms_03
     ]
 
-    assert titles == expected_titles, f"Expected titles {expected_titles}, but got {titles}"
+    assert bookmarks == expected_bookmarks, f"Expected bookmarks {expected_bookmarks}, but got {bookmarks}"
