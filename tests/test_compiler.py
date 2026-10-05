@@ -87,3 +87,155 @@ def test_single_variant_collation():
     # First call: 1 folder fetch + 2 PDF fetches = 3
     # Second call: 1 folder fetch + 0 PDF fetches = 4 total calls
     assert len(responses.calls) == 4, "Network was hit again despite caching!"
+
+import pytest
+
+@responses.activate
+def test_missing_documents():
+    output_dir = "output_missing"
+
+    # Test missing QP
+    mock_html_no_qp = """
+    <script>AF_initDataCallback({key: 'ds:1', data: [
+        ["mock_ms_id", "9609_s23_ms_11.pdf"]
+    ]});</script>
+    """
+    responses.add(responses.GET, "https://drive.google.com/drive/folders/folder_no_qp", body=mock_html_no_qp, status=200)
+
+    with pytest.raises(ValueError, match="Question Paper 9609_s23_qp_11.pdf not found in folder metadata"):
+        compile_variant(
+            syllabus="9609",
+            year="2023",
+            series="May/June",
+            variant="11",
+            component="1",
+            folder_id="folder_no_qp",
+            output_dir=output_dir
+        )
+
+    # Test missing MS
+    mock_html_no_ms = """
+    <script>AF_initDataCallback({key: 'ds:1', data: [
+        ["mock_qp_id", "9609_s23_qp_11.pdf"]
+    ]});</script>
+    """
+    responses.add(responses.GET, "https://drive.google.com/drive/folders/folder_no_ms", body=mock_html_no_ms, status=200)
+
+    with pytest.raises(ValueError, match="Mark Scheme 9609_s23_ms_11.pdf not found in folder metadata"):
+        compile_variant(
+            syllabus="9609",
+            year="2023",
+            series="May/June",
+            variant="11",
+            component="1",
+            folder_id="folder_no_ms",
+            output_dir=output_dir
+        )
+
+from pypdf.errors import PdfStreamError, PdfReadError
+
+@responses.activate
+def test_corrupt_pdf():
+    cache_dir = ".cache/drive_cache"
+    output_dir = "output_corrupt"
+
+    # We must ensure there is no cached file, else fetch_document returns it instead of making requests
+    cached_qp = os.path.join(cache_dir, "9609_s23_qp_11.pdf")
+    cached_ms = os.path.join(cache_dir, "9609_s23_ms_11.pdf")
+    if os.path.exists(cached_qp):
+        os.remove(cached_qp)
+    if os.path.exists(cached_ms):
+        os.remove(cached_ms)
+
+    mock_html = """
+    <script>AF_initDataCallback({key: 'ds:1', data: [
+        ["mock_qp_id", "9609_s23_qp_11.pdf"],
+        ["mock_ms_id", "9609_s23_ms_11.pdf"]
+    ]});</script>
+    """
+    responses.add(responses.GET, "https://drive.google.com/drive/folders/folder_corrupt", body=mock_html, status=200)
+
+    qp_url = "https://drive.google.com/uc?export=download&id=mock_qp_id"
+    ms_url = "https://drive.google.com/uc?export=download&id=mock_ms_id"
+
+    # Return invalid PDF bytes
+    responses.add(responses.GET, qp_url, body=b"this is not a pdf file", status=200)
+    responses.add(responses.GET, ms_url, body=b"this is also not a pdf file", status=200)
+
+    with pytest.raises((PdfStreamError, PdfReadError)):
+        compile_variant(
+            syllabus="9609",
+            year="2023",
+            series="May/June",
+            variant="11",
+            component="1",
+            folder_id="folder_corrupt",
+            output_dir=output_dir
+        )
+
+@responses.activate
+def test_cache_invalidation():
+    cache_dir = ".cache/drive_cache"
+    output_dir = "output_cache"
+    if os.path.exists(cache_dir):
+        shutil.rmtree(cache_dir)
+    os.makedirs(cache_dir, exist_ok=True)
+
+    with open("tests/fixtures/qp.pdf", "rb") as f:
+        qp_content = f.read()
+    with open("tests/fixtures/ms.pdf", "rb") as f:
+        ms_content = f.read()
+
+    mock_html = """
+    <script>AF_initDataCallback({key: 'ds:1', data: [
+        ["mock_qp_id_2", "9609_s23_qp_11.pdf"],
+        ["mock_ms_id_2", "9609_s23_ms_11.pdf"]
+    ]});</script>
+    """
+
+    responses.add(responses.GET, "https://drive.google.com/drive/folders/folder_cache", body=mock_html, status=200)
+    responses.add(responses.GET, "https://drive.google.com/uc?export=download&id=mock_qp_id_2", body=qp_content, status=200)
+    responses.add(responses.GET, "https://drive.google.com/uc?export=download&id=mock_ms_id_2", body=ms_content, status=200)
+
+    # 1. First run, empty cache, should fetch 1 metadata + 2 pdfs = 3 calls
+    compile_variant(
+        syllabus="9609",
+        year="2023",
+        series="May/June",
+        variant="11",
+        component="1",
+        folder_id="folder_cache",
+        output_dir=output_dir
+    )
+
+    assert len(responses.calls) == 3
+
+    # 2. Second run, cache populated, should only fetch 1 metadata = +1 call = 4 total
+    compile_variant(
+        syllabus="9609",
+        year="2023",
+        series="May/June",
+        variant="11",
+        component="1",
+        folder_id="folder_cache",
+        output_dir=output_dir
+    )
+
+    assert len(responses.calls) == 4
+
+    # 3. Cache invalidation: delete only the QP from the cache
+    cached_qp = os.path.join(cache_dir, "9609_s23_qp_11.pdf")
+    os.remove(cached_qp)
+
+    # 4. Third run, cache missing QP, should fetch 1 metadata + 1 QP pdf = +2 calls = 6 total
+    compile_variant(
+        syllabus="9609",
+        year="2023",
+        series="May/June",
+        variant="11",
+        component="1",
+        folder_id="folder_cache",
+        output_dir=output_dir
+    )
+
+    assert len(responses.calls) == 6
