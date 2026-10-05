@@ -106,6 +106,7 @@ def crawl_tree(root_folder_id_or_url: str) -> dict:
         if re.match(r'^20(1[6-9]|2[0-5])$', item_name):
             year = item_name
             tree[year] = {}
+            tree[year]['_folder_id'] = item_id
 
             # 2. Fetch series folder (m, s, w, y)
             series_metadata = get_folder_metadata(item_id)
@@ -113,6 +114,7 @@ def crawl_tree(root_folder_id_or_url: str) -> dict:
                 if series_name in ('m', 's', 'w', 'y'):
                     series = series_name
                     tree[year][series] = {}
+                    tree[year][series]['_folder_id'] = series_id
 
                     # 3. Fetch files inside series folder
                     files_metadata = get_folder_metadata(series_id)

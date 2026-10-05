@@ -3,15 +3,88 @@ import sys
 import questionary
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
 from ppq_mertactor.compiler import compile_component, compile_examiner_reports
-# The compiler needs series_folders. The issue description does not say where they come from for the CLI,
-# so let's import the hardcoded list from drive if it's there or just pass an empty dict for testing,
-# or better yet, since the requirement is to use existing compile_component and compile_examiner_reports,
-# and they both require folder_ids... let's see how drive handles it.
-# We'll import a dummy function or use real fetching if we can, but since this is CLI testing, we can
-# just use dummy folder mappings for now if not provided, or fetch them if there's a function.
+from ppq_mertactor.drive import crawl_tree
 
-# Let's inspect drive.py briefly in a bash command later to see if it exposes folder fetching.
-# For now, let's implement the basic argparse structure.
+def run_compilation_pipeline(years, components, do_er, syllabus, output_dir, tree=None, default_series_folders=None, default_er_folder=None):
+    if default_series_folders is None:
+        default_series_folders = {}
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+    ) as progress:
+        task = progress.add_task("[cyan]Compiling papers...", total=len(years) * (len(components) + (1 if do_er else 0)))
+
+        download_task_id = None
+
+        def download_progress_callback(chunk_size, total_bytes):
+            nonlocal download_task_id
+            if total_bytes == 0:
+                return
+            if download_task_id is None:
+                download_task_id = progress.add_task("[green]Downloading...", total=total_bytes)
+            else:
+                task_obj = progress._tasks[download_task_id]
+                if task_obj.total != total_bytes:
+                    progress.update(download_task_id, total=total_bytes, completed=0)
+
+            progress.update(download_task_id, advance=chunk_size)
+            task_obj = progress._tasks[download_task_id]
+            if task_obj.completed >= task_obj.total:
+                progress.remove_task(download_task_id)
+                download_task_id = None
+
+        for year in years:
+            # Resolve series folders and er folder for this year
+            series_folders = default_series_folders.copy()
+            er_folder = default_er_folder
+
+            if tree and year in tree:
+                year_node = tree[year]
+                er_folder = year_node.get('_folder_id', er_folder)
+
+                # Mapping Drive series folder names to Cambridge series names
+                series_mapping = {
+                    'm': 'Feb/March',
+                    's': 'May/June',
+                    'w': 'Oct/Nov',
+                    'y': 'Specimen'
+                }
+
+                for code, name in series_mapping.items():
+                    if code in year_node and '_folder_id' in year_node[code]:
+                        series_folders[name] = year_node[code]['_folder_id']
+
+            for comp in components:
+                progress.update(task, description=f"[cyan]Compiling {year} Component {comp}...")
+                if series_folders:
+                    compile_component(
+                        syllabus=syllabus,
+                        year=year,
+                        component=comp,
+                        series_folders=series_folders,
+                        output_dir=output_dir,
+                        progress_callback=download_progress_callback
+                    )
+                else:
+                    progress.console.print(f"[red]Skipping {year} Component {comp} - no series folder IDs provided.")
+                progress.advance(task)
+
+            if do_er:
+                progress.update(task, description=f"[cyan]Compiling {year} Examiner Reports...")
+                if er_folder:
+                    compile_examiner_reports(
+                        syllabus=syllabus,
+                        year=year,
+                        folder_id=er_folder,
+                        output_dir=output_dir,
+                        progress_callback=download_progress_callback
+                    )
+                else:
+                    progress.console.print(f"[red]Skipping {year} Examiner Reports - no ER folder ID provided.")
+                progress.advance(task)
 
 def run_headless(args):
     series_folders = {}
@@ -40,41 +113,26 @@ def run_headless(args):
     if args.cache_dir:
         os.environ["DRIVE_CACHE_DIR"] = args.cache_dir # we'll patch drive.py to use this
 
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TaskProgressColumn(),
-    ) as progress:
-        task = progress.add_task("[cyan]Compiling papers...", total=len(years) * (len(components) + (1 if do_er else 0)))
+    if not years or (not components and not do_er):
+        return
 
-        for year in years:
-            for comp in components:
-                progress.update(task, description=f"[cyan]Compiling {year} Component {comp}...")
-                if series_folders:
-                    compile_component(
-                        syllabus=syllabus,
-                        year=year,
-                        component=comp,
-                        series_folders=series_folders,
-                        output_dir=args.output_dir
-                    )
-                else:
-                    progress.console.print(f"[red]Skipping {year} Component {comp} - no series folder IDs provided.")
-                progress.advance(task)
+    tree = None
+    if not series_folders and not args.er_folder:
+        try:
+            tree = crawl_tree(args.root_folder)
+        except Exception as e:
+            print(f"Failed to crawl root folder: {e}")
 
-            if do_er:
-                progress.update(task, description=f"[cyan]Compiling {year} Examiner Reports...")
-                if args.er_folder:
-                    compile_examiner_reports(
-                        syllabus=syllabus,
-                        year=year,
-                        folder_id=args.er_folder,
-                        output_dir=args.output_dir
-                    )
-                else:
-                    progress.console.print(f"[red]Skipping {year} Examiner Reports - no ER folder ID provided.")
-                progress.advance(task)
+    run_compilation_pipeline(
+        years=years,
+        components=components,
+        do_er=do_er,
+        syllabus=syllabus,
+        output_dir=args.output_dir,
+        tree=tree,
+        default_series_folders=series_folders,
+        default_er_folder=args.er_folder
+    )
 
 def main(argv=None):
     if argv is None:
@@ -91,6 +149,7 @@ def main(argv=None):
     parser.add_argument("--output-dir", type=str, default="output", help="Directory for compiled output.")
 
     # Folder arguments
+    parser.add_argument("--root-folder", type=str, default="1MLOKA_LiWgEbS_XajDifzLtBUFmqJGBM", help="Google Drive Root Folder ID for discovery.")
     parser.add_argument("--series-m", type=str, help="Google Drive folder ID for Feb/March series.")
     parser.add_argument("--series-s", type=str, help="Google Drive folder ID for May/June series.")
     parser.add_argument("--series-w", type=str, help="Google Drive folder ID for Oct/Nov series.")
@@ -108,7 +167,7 @@ def run_tui():
     print("Welcome to the Cambridge Past Paper Compiler!")
 
     # 1. Ask for years
-    year_choices = [str(y) for y in range(2016, 2026)]
+    year_choices = ["Select All"] + [str(y) for y in range(2016, 2026)]
     selected_years = questionary.checkbox(
         "Select examination years to compile:",
         choices=year_choices
@@ -117,6 +176,9 @@ def run_tui():
     if not selected_years:
         print("No years selected. Exiting.")
         return
+
+    if "Select All" in selected_years:
+        selected_years = [str(y) for y in range(2016, 2026)]
 
     # 2. Ask for compilation targets
     target_choices = [
@@ -152,58 +214,23 @@ def run_tui():
     output_dir = questionary.text("Enter output directory:", default="output").ask() or "output"
 
     series_folders = {}
-    if components:
-        print("\n[Components require Google Drive folder IDs for the series]")
-        m_id = questionary.text("Folder ID for Feb/March (leave blank if none):").ask()
-        if m_id: series_folders["Feb/March"] = m_id
-
-        s_id = questionary.text("Folder ID for May/June (leave blank if none):").ask()
-        if s_id: series_folders["May/June"] = s_id
-
-        w_id = questionary.text("Folder ID for Oct/Nov (leave blank if none):").ask()
-        if w_id: series_folders["Oct/Nov"] = w_id
-
-        y_id = questionary.text("Folder ID for Specimen (leave blank if none):").ask()
-        if y_id: series_folders["Specimen"] = y_id
-
     er_folder_id = None
-    if do_er:
-        print("\n[Examiner Reports require a Google Drive folder ID]")
-        er_folder_id = questionary.text("Folder ID for Examiner Reports:").ask()
+    tree = None
+
+    try:
+        print("\n[Discovering root folder to automatically map examination series...]")
+        tree = crawl_tree("1MLOKA_LiWgEbS_XajDifzLtBUFmqJGBM")
+    except Exception as e:
+        print(f"Failed to crawl default root folder: {e}")
 
     # Call compiler logic
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TaskProgressColumn(),
-    ) as progress:
-        task = progress.add_task("[cyan]Compiling papers...", total=len(selected_years) * (len(components) + (1 if do_er else 0)))
-
-        for year in selected_years:
-            for comp in components:
-                progress.update(task, description=f"[cyan]Compiling {year} Component {comp}...")
-                if series_folders:
-                    compile_component(
-                        syllabus=syllabus,
-                        year=year,
-                        component=comp,
-                        series_folders=series_folders,
-                        output_dir=output_dir
-                    )
-                else:
-                    progress.console.print(f"[red]Skipping {year} Component {comp} - no series folder IDs provided.")
-                progress.advance(task)
-
-            if do_er:
-                progress.update(task, description=f"[cyan]Compiling {year} Examiner Reports...")
-                if er_folder_id:
-                    compile_examiner_reports(
-                        syllabus=syllabus,
-                        year=year,
-                        folder_id=er_folder_id,
-                        output_dir=output_dir
-                    )
-                else:
-                    progress.console.print(f"[red]Skipping {year} Examiner Reports - no ER folder ID provided.")
-                progress.advance(task)
+    run_compilation_pipeline(
+        years=selected_years,
+        components=components,
+        do_er=do_er,
+        syllabus=syllabus,
+        output_dir=output_dir,
+        tree=tree,
+        default_series_folders=series_folders,
+        default_er_folder=er_folder_id
+    )

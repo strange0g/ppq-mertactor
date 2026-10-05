@@ -12,7 +12,9 @@ def get_series_code(series: str) -> str:
     }
     return mapping.get(series, "s")
 
-def compile_examiner_reports(syllabus: str, year: str, folder_id: str, output_dir: str = "output") -> str:
+from typing import Callable, Optional
+
+def compile_examiner_reports(syllabus: str, year: str, folder_id: str, output_dir: str = "output", progress_callback: Optional[Callable[[int, int], None]] = None) -> str:
     """
     Compiles an Examiner Reports Compilation consolidating all series examiner reports for the selected year.
     """
@@ -38,7 +40,7 @@ def compile_examiner_reports(syllabus: str, year: str, folder_id: str, output_di
     for code, filename in expected_filenames:
         if filename in metadata:
             file_id = metadata[filename]
-            doc_path = fetch_document(file_id, filename)
+            doc_path = fetch_document(file_id, filename, progress_callback=progress_callback)
 
             # Record start page
             start_page_index = len(writer.pages)
@@ -64,7 +66,7 @@ def compile_examiner_reports(syllabus: str, year: str, folder_id: str, output_di
 
     return output_path
 
-def compile_component(syllabus: str, year: str, component: str, series_folders: dict[str, str], output_dir: str = "output") -> str:
+def compile_component(syllabus: str, year: str, component: str, series_folders: dict[str, str], output_dir: str = "output", progress_callback: Optional[Callable[[int, int], None]] = None) -> str:
     """
     Compiles a Component Compilation for a specific component.
     """
@@ -145,7 +147,7 @@ def compile_component(syllabus: str, year: str, component: str, series_folders: 
                 file_id = docs[doc_type]
                 filename = f"{syllabus}_{series_code}{year_short}_{doc_type}_{variant}.pdf"
 
-                doc_path = fetch_document(file_id, filename)
+                doc_path = fetch_document(file_id, filename, progress_callback=progress_callback)
 
                 # Append pdf
                 start_page = len(writer.pages)

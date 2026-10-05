@@ -195,16 +195,21 @@ def test_crawl_tree():
 
     assert tree == {
         "2023": {
+            "_folder_id": "folder_2023_id",
             "m": {
+                "_folder_id": "folder_2023_m_id",
                 "9609_m23_qp_12.pdf": "file_1_id",
                 "9609_m23_ms_12.pdf": "file_2_id"
             },
             "s": {
+                "_folder_id": "folder_2023_s_id",
                 "9609_s23_qp_11.pdf": "file_3_id"
             }
         },
         "2024": {
+            "_folder_id": "folder_2024_id",
             "w": {
+                "_folder_id": "folder_2024_w_id",
                 "9609_w24_in_31.pdf": "file_4_id"
             }
         }
@@ -297,7 +302,9 @@ def test_crawl_tree_deeply_nested_subfolders_ignored():
     # Assert nested folders and invalid years/series are ignored
     assert tree == {
         "2023": {
+            "_folder_id": "folder_2023_id",
             "m": {
+                "_folder_id": "folder_2023_m_id",
                 "9609_m23_qp_12.pdf": "file_1_id",
             }
         }
@@ -350,7 +357,9 @@ def test_crawl_tree_url():
     tree = crawl_tree(url)
     assert tree == {
         "2023": {
+            "_folder_id": "folder_2023_id",
             "m": {
+                "_folder_id": "folder_m_id",
                 "test.pdf": "f_id"
             }
         }
