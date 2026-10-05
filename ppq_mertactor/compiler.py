@@ -56,3 +56,52 @@ def compile_variant(syllabus: str, year: str, series: str, variant: str, compone
         writer.write(out_f)
 
     return output_path
+
+def compile_examiner_reports(syllabus: str, year: str, folder_id: str, output_dir: str = "output") -> str:
+    """
+    Compiles all series examiner reports for the selected year into a single document.
+    """
+    # 1. Fetch metadata
+    metadata = get_folder_metadata(folder_id)
+
+    year_short = year[-2:]
+
+    # Chronological series codes mapping
+    series_titles = {
+        "m": f"Feb/March {year}",
+        "s": f"May/June {year}",
+        "w": f"Oct/Nov {year}"
+    }
+
+    # Expected file format: 9609_s23_er.pdf
+    expected_filenames = []
+    for code in ["m", "s", "w"]:
+        expected_filenames.append((code, f"{syllabus}_{code}{year_short}_er.pdf"))
+
+    writer = PdfWriter()
+
+    for code, filename in expected_filenames:
+        if filename in metadata:
+            file_id = metadata[filename]
+            doc_path = fetch_document(file_id, filename)
+
+            # Record start page
+            start_page_index = len(writer.pages)
+
+            # Append document
+            writer.append(doc_path)
+
+            # Add bookmark
+            writer.add_outline_item(series_titles[code], start_page_index)
+
+    # Output
+    full_output_dir = os.path.join(output_dir, syllabus, year)
+    os.makedirs(full_output_dir, exist_ok=True)
+
+    output_filename = f"{syllabus}_{year}_Examiner_Reports.pdf"
+    output_path = os.path.join(full_output_dir, output_filename)
+
+    with open(output_path, "wb") as out_f:
+        writer.write(out_f)
+
+    return output_path
